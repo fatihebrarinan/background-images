@@ -1,0 +1,8 @@
+[Unit]
+Description=Wallqueue wallpaper tick
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/wallqueue tick
+Nice=10
+TimeoutStartSec=30min

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Wallqueue
+Comment=Günlük duvar kağıtları
+Exec=wallqueue gui
+Icon=preferences-desktop-wallpaper
+Terminal=false
+Categories=Utility;GTK;
