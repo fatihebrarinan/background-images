@@ -1,47 +1,75 @@
 # Wallqueue
 
-Linux Mint Cinnamon için günlük duvar kağıdı uygulaması. Bing, NASA APOD, Wikimedia,
-NASA Image of the Day, ESA/Hubble ve ESO resimlerini bir kuyrukta toplar ve bilgisayar
-açıkken seçtiğin aralıkla (1–5 saat) sırayla gösterir.
+A daily wallpaper app for Linux Mint Cinnamon. It collects images from Bing, NASA APOD,
+Wikimedia, NASA Image of the Day, ESA/Hubble and ESO into a queue, then shows them in turn
+at an interval you choose (1–5 hours of computer use).
 
-## Kurulum
+The settings window is currently in Turkish.
+
+## Requirements
+
+- Linux Mint or another desktop running Cinnamon
+- systemd user services
+- `python3-requests`, `python3-pil` and `python3-gi`, which Mint ships by default
+
+No API keys are needed.
+
+## Installation
 
 ```sh
+git clone https://github.com/fatihebrarinan/background-images.git
+cd background-images
 ./install.sh
 ```
 
-Ek paket gerekmez: `python3-requests`, `python3-pil` ve `python3-gi` Mint'te hazır gelir.
+The installer points at the cloned folder, so run it again if you move the project.
 
-## Kullanım
+## Usage
 
 ```sh
-wallqueue gui      # ayar penceresi
-wallqueue next     # sonraki resim
-wallqueue status   # kuyruk durumu
-wallqueue fetch    # kaynakları hemen tara
-journalctl --user -u wallqueue.service   # günlükler
+wallqueue gui      # settings window
+wallqueue next     # show the next wallpaper
+wallqueue status   # print the queue state
+wallqueue fetch    # check the sources now
+journalctl --user -u wallqueue.service   # logs
 ```
 
-## Nasıl çalışır
+From the settings window you can change the interval, turn sources on or off, skip an image,
+mark it as a favorite, or ban it.
 
-Sürekli çalışan bir süreç yoktur. systemd zamanlayıcısı 5 dakikada bir `wallqueue tick`
-komutunu çalıştırır, komut işini yapıp kapanır:
+## How it works
 
-- Günde bir kez kaynakları tarar; internet yoksa 15 dakikada bir yeniden dener.
-- Yalnızca bilgisayarın açık olduğu süreyi sayar. Uyku ve kapalı kalınan süre sayılmaz,
-  sayaç yeniden açılışlarda sıfırlanmaz. Seçilen süre dolunca resmi değiştirir.
-- Sıradaki 20 resmi indirilmiş tutar, böylece internetsiz günlerde de çalışır.
+There is no long-running process. A systemd timer runs `wallqueue tick` every five minutes,
+and the command does what is due and exits:
 
-Kaynaklar sırayla döner ve her kaynak en yeni resmini önce sunar. Kuyruk 20'nin altına
-düşerse APOD ve Wikimedia arşivlerinden eski resimler çekilir, kuyruk 200'ü geçerse
-sondaki en eski kayıtlar atılır. İnternet de yoksa daha önce gösterilenler yeniden
-kullanılır. Disk kullanımı 1 GB'ı geçerse en eski gösterilen dosyalar silinir; ekrandaki
-resim ve favoriler silinmez.
+- It checks the sources once a day and retries every 15 minutes while offline.
+- It counts only the time the computer is on. Sleep and shutdown do not count, and the
+  counter is not reset by a restart. When the chosen time has passed, the wallpaper changes.
+- It keeps the next 20 images downloaded, so offline days still work.
 
-Ayarlar `~/.config/wallqueue/config.json`, veriler `~/.local/share/wallqueue/` altındadır.
+Sources take turns, and each one offers its newest image first. Images that are not landscape
+or are smaller than 1920×1000 are skipped, as are videos and duplicates.
 
-## Testler
+The queue is designed never to run dry:
+
+1. The next unseen image is shown.
+2. Below 20 waiting images, older images are pulled from the APOD and Wikimedia archives.
+3. If nothing new can be reached, previously shown images are reused.
+4. If there are no images at all, the current wallpaper stays.
+
+Above 200 waiting images, the oldest entries are dropped from the tail. Above 1 GB of disk use,
+the files shown longest ago are deleted. The current image and favorites are never deleted.
+
+Settings live in `~/.config/wallqueue/config.json` and data in `~/.local/share/wallqueue/`.
+
+## Image rights
+
+Wallqueue downloads images for personal use on your own desktop. The images belong to their
+respective owners and are not covered by this project; check each source's terms before
+reusing them elsewhere.
+
+## Tests
 
 ```sh
-python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests -t .
 ```
