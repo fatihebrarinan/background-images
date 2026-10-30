@@ -62,10 +62,12 @@ the files shown longest ago are deleted. The current image and favorites are nev
 
 Settings live in `~/.config/wallqueue/config.json` and data in `~/.local/share/wallqueue/`.
 
-## Image rights
+## License
+
+The code is released under the [MIT License](LICENSE).
 
 Wallqueue downloads images for personal use on your own desktop. The images belong to their
-respective owners and are not covered by this project; check each source's terms before
+respective owners and are not covered by this license; check each source's terms before
 reusing them elsewhere.
 
 ## Tests
