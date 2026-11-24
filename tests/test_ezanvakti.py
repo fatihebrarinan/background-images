@@ -180,6 +180,8 @@ class IslamicThemeTests(SharedFilesMixin, EngineTestCase):
     def test_falls_back_when_no_islamic_picture_is_ready(self) -> None:
         self.write_hint(self.today)
         engine = self.prepare()
+        # The list runs dry, so even refilling from the archive brings none.
+        self.write_list([])
         for image in self.store.waiting():
             if image.source == Islami.name:
                 self.store.set_state(image.id, State.REJECTED)

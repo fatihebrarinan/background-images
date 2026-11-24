@@ -1,0 +1,8 @@
+[Nemo Action]
+Name=Sonraki duvar kâğıdı
+Comment=Wallqueue sıradaki resmi duvar kâğıdı yapar
+Exec=wallqueue next --notify
+Icon-Name=wallqueue-symbolic
+Selection=None
+Extensions=any;
+Conditions=desktop;

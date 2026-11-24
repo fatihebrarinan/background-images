@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <title>Wallqueue</title>
+  <g fill="#2e3436">
+    <!-- The queue: edges of the pictures waiting behind. -->
+    <path d="M5 1.5 A 1.5 1.5 0 0 1 6.5 0 H 14.5 A 1.5 1.5 0 0 1 16 1.5 V 7.5 A 1.5 1.5 0 0 1 14.5 9 H 14 V 1 H 5 Z"/>
+    <path d="M2.5 4.5 A 1.5 1.5 0 0 1 4 3 H 12 A 1.5 1.5 0 0 1 13.5 4.5 V 10.5 A 1.5 1.5 0 0 1 12 12 H 11.5 V 4 H 2.5 Z"/>
+    <!-- The current picture: a frame with a hill and the sun. -->
+    <path fill-rule="evenodd" d="M1.5 6 H 9.5 A 1.5 1.5 0 0 1 11 7.5 V 14.5 A 1.5 1.5 0 0 1 9.5 16 H 1.5 A 1.5 1.5 0 0 1 0 14.5 V 7.5 A 1.5 1.5 0 0 1 1.5 6 Z M 1.5 7.5 V 12.5 L 4 10 L 6.5 12.5 L 7.5 11.5 L 9.5 13.5 V 7.5 Z"/>
+    <circle cx="7.5" cy="9.25" r="1"/>
+  </g>
+</svg>

@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>Wallqueue</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4f9fe0"/>
+      <stop offset="0.65" stop-color="#9fd0f2"/>
+      <stop offset="1" stop-color="#ffe2a8"/>
+    </linearGradient>
+    <linearGradient id="back" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5e6fb8"/>
+      <stop offset="1" stop-color="#4a5a9c"/>
+    </linearGradient>
+    <linearGradient id="middle" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3fa7a0"/>
+      <stop offset="1" stop-color="#2f8a84"/>
+    </linearGradient>
+    <clipPath id="photo">
+      <rect x="13" y="51" width="82" height="56" rx="5"/>
+    </clipPath>
+  </defs>
+
+  <!-- The queue: the pictures still to come, waiting behind the current one. -->
+  <rect x="33" y="17" width="88" height="62" rx="9" fill="url(#back)"/>
+  <rect x="23" y="31" width="88" height="62" rx="9" fill="url(#middle)"/>
+  <rect x="23" y="31" width="88" height="62" rx="9" fill="none" stroke="#000" stroke-opacity="0.12" stroke-width="1"/>
+
+  <!-- The current picture, in a white frame. -->
+  <rect x="9" y="49" width="90" height="64" rx="9" fill="#000" fill-opacity="0.18" transform="translate(0 2)"/>
+  <rect x="8" y="46" width="92" height="66" rx="9" fill="#fbfbfb"/>
+  <g clip-path="url(#photo)">
+    <rect x="13" y="51" width="82" height="56" fill="url(#sky)"/>
+    <circle cx="74" cy="72" r="9" fill="#ffc94d"/>
+    <path d="M13 94 C 28 78, 40 76, 54 86 C 64 93, 76 82, 95 84 L 95 107 L 13 107 Z" fill="#5fae6e"/>
+    <path d="M13 99 C 30 90, 46 94, 60 100 C 72 105, 84 96, 95 97 L 95 107 L 13 107 Z" fill="#3b8a57"/>
+  </g>
+</svg>

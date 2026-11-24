@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -32,10 +34,21 @@ MAX_DOWNLOAD_ATTEMPTS = 3
 ARCHIVE_SKIP_DAYS = 30
 # Pictures the user adds by hand with `wallqueue add`.
 LOCAL_SOURCE = "yerel"
+# While a source is in focus, keep at least this many of its pictures downloaded,
+# even when the download buffer is already full of other sources.
+FOCUS_READY = 5
 
 
 def _skip_back(day: str) -> str:
     return (date.fromisoformat(day) - timedelta(days=ARCHIVE_SKIP_DAYS)).isoformat()
+
+
+@dataclass(frozen=True)
+class Focus:
+    """A source the user asked to see before the others."""
+
+    source: str
+    until: str | None  # The last day (ISO) it lasts, or None until turned off.
 
 
 @dataclass(frozen=True)
@@ -46,6 +59,7 @@ class Status:
     disk_bytes: int
     active_seconds: float
     islamic_theme: bool = False
+    focus: Focus | None = None
 
 
 class Engine:
@@ -66,12 +80,24 @@ class Engine:
         self.http = http or Http()
         self.apply_wallpaper = apply_wallpaper
         self.clock = clock
+        self.lock_path = images_dir.parent / "wallqueue.lock"
         images_dir.mkdir(parents=True, exist_ok=True)
 
     @classmethod
     def create(cls) -> Engine:
         root = data_dir()
         return cls(Config.load(), Store(root / "wallqueue.db"), root / "images")
+
+    @contextmanager
+    def exclusive(self) -> Iterator[None]:
+        """Let one process at a time change the queue.
+
+        The timer, the desktop menu and the settings window may all act at once;
+        without this two of them could change the wallpaper back to back.
+        """
+        with open(self.lock_path, "a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            yield
 
     # Entry points
 
@@ -89,13 +115,8 @@ class Engine:
         # Local sources always answer, so they must not stop the retries while offline.
         reached = not any(source.needs_network for source in sources)
         for source in sources:
-            try:
-                added = self.store.add(source.latest(self.http))
-            except (requests.RequestException, ValueError, KeyError, SyntaxError) as error:
-                log.warning("%s failed: %s", source.name, error)
-                continue
-            reached = reached or source.needs_network
-            log.info("%s: %d new", source.name, added)
+            if self._fetch_latest(source):
+                reached = reached or source.needs_network
         if reached:
             self.store.put("last_fetch_day", date.fromtimestamp(self.clock()).isoformat())
             self.replenish()
@@ -170,6 +191,55 @@ class Engine:
         if self.store.get("current_id") != str(current.id):
             self._discard(current, State.BANNED)
 
+    def focus(self) -> Focus | None:
+        """The source the user put first, while it lasts and is turned on."""
+        source = self.store.get("focus_source")
+        until = self.store.get("focus_until") or None
+        if source not in {s.name for s in self._enabled_sources()}:
+            return None
+        if until is not None and until < self._today():
+            return None
+        return Focus(source, until)
+
+    def set_focus(self, source: str | None, today_only: bool = False) -> Focus | None:
+        """Show `source` before the others, for today or until turned off.
+
+        None turns the focus off. Raises ValueError for an unknown or turned-off
+        source. Call `show_focus` afterwards to switch to one of its pictures.
+        """
+        if source is not None:
+            if source not in {s.name for s in self.sources}:
+                raise ValueError(f"unknown source: {source}")
+            if source in self.config.disabled_sources:
+                raise ValueError(f"source is turned off: {source}")
+        self.store.put("focus_source", source or "")
+        self.store.put("focus_until", self._today() if source and today_only else "")
+        return self.focus()
+
+    def show_focus(self) -> Image | None:
+        """Bring in the focused source's pictures and put one of them on screen.
+
+        Nothing changes on screen when no source is in focus, when the wallpaper
+        already comes from it, or when none of its pictures could be downloaded;
+        it then simply goes first from now on. Returns the image put on screen.
+        """
+        self.replenish()
+        focus = self.focus()
+        current = self.store.current()
+        if focus is None or (current is not None and current.source == focus.source):
+            return None
+        # Not `advance`: a picture added by hand may wait in front, and it can keep
+        # its place for the next change.
+        image = next(
+            (
+                i
+                for i in self._queue()
+                if i.state == State.READY and i.source == focus.source
+            ),
+            None,
+        )
+        return self.show(image) if image else None
+
     def toggle_favorite(self) -> bool:
         current = self.store.current()
         if current is None:
@@ -186,6 +256,7 @@ class Engine:
             disk_bytes=self.store.disk_usage(),
             active_seconds=float(self.store.get("active_seconds", "0")),
             islamic_theme=self._islamic_theme(),
+            focus=self.focus(),
         )
 
     # Scheduling
@@ -215,21 +286,32 @@ class Engine:
     def _queue(self) -> list[Image]:
         """Waiting images in showing order.
 
-        Pictures added by hand come first, newest addition first. On the religious
-        days Ezan Vakti marks, its Islamic pictures come next, so the next ready one
-        is shown and the next queued one is downloaded first. Everything else
-        follows the usual rotation.
+        Pictures added by hand come first, newest addition first. The source in
+        focus comes next: the one the user chose, or else Ezan Vakti's Islamic
+        pictures on the religious days it marks. Its next ready picture is shown
+        and its next queued one is downloaded first. Everything else follows the
+        usual rotation.
         """
         waiting = self.store.waiting(self.config.disabled_sources)
         pinned = self._pinned()
-        theme = self._islamic_theme()
+        first = self._first_source()
 
         def rank(image: Image) -> int:
             if image.id in pinned:
                 return pinned.index(image.id)
-            return len(pinned) + (0 if theme and image.source == Islami.name else 1)
+            return len(pinned) + (0 if image.source == first else 1)
 
         return sorted(rotate(waiting, self.store.source_last_shown()), key=rank)
+
+    def _first_source(self) -> str | None:
+        """The source whose pictures go before the others, if any."""
+        focus = self.focus()
+        if focus is not None:
+            return focus.source
+        return Islami.name if self._islamic_theme() else None
+
+    def _today(self) -> str:
+        return date.fromtimestamp(self.clock()).isoformat()
 
     def _islamic_theme(self) -> bool:
         if all(source.name != Islami.name for source in self._enabled_sources()):
@@ -255,6 +337,16 @@ class Engine:
             credit=credit,
         )
 
+    def _fetch_latest(self, source: Source) -> bool:
+        """Add what the source currently publishes. Returns whether it answered."""
+        try:
+            added = self.store.add(source.latest(self.http))
+        except (requests.RequestException, ValueError, KeyError, SyntaxError) as error:
+            log.warning("%s failed: %s", source.name, error)
+            return False
+        log.info("%s: %d new", source.name, added)
+        return True
+
     def _next_ready(self) -> Image | None:
         return next((i for i in self._queue() if i.state == State.READY), None)
 
@@ -263,13 +355,30 @@ class Engine:
         return next((i for i in self.store.recyclable() if str(i.id) != current_id), None)
 
     def _backfill(self) -> None:
-        if len(self._queue()) >= self.config.low_water:
-            return
-        for source in self._enabled_sources():
+        """Fetch older images from the archives when the queue runs low.
+
+        The source in focus is also refilled when its own pictures run low, since
+        the other sources would otherwise keep the queue full without it.
+        """
+        queue = self._queue()
+        first = self._first_source()
+        if len(queue) >= self.config.low_water:
+            waiting_first = sum(image.source == first for image in queue)
+            if first is None or waiting_first >= self.config.low_water:
+                return
+            sources = [s for s in self._enabled_sources() if s.name == first]
+        else:
+            sources = self._enabled_sources()
+        for source in sources:
             cursor_key = f"archive_cursor:{source.name}"
             cursor = self.store.get(cursor_key) or self.store.oldest_published(source.name)
             if cursor is None:
-                continue
+                # A source turned on today has nothing yet to walk back from; when
+                # it is in focus, waiting for tomorrow's check would be too long.
+                if source.name == first and self._fetch_latest(source):
+                    cursor = self.store.oldest_published(source.name)
+                if cursor is None:
+                    continue
             try:
                 batch = source.older_than(self.http, cursor)
             except (requests.RequestException, ValueError, KeyError) as error:
@@ -286,16 +395,27 @@ class Engine:
             self._discard(image, State.DROPPED)
 
     def _download_upcoming(self) -> None:
+        """Keep the buffer of downloaded images full, the source in focus first."""
         queue = self._queue()
+        first = self._first_source()
         missing = self.config.ready_buffer - sum(i.state == State.READY for i in queue)
+        missing_first = FOCUS_READY - sum(
+            i.state == State.READY and i.source == first for i in queue
+        )
+        # The focused source's pictures lead the queue, so once they are passed
+        # only the general buffer matters.
         for image in (i for i in queue if i.state == State.QUEUED):
-            if missing <= 0:
+            focused = first is not None and image.source == first
+            if missing <= 0 and not (focused and missing_first > 0):
                 return
             try:
-                missing -= self._download(image)
+                downloaded = self._download(image)
             except (requests.ConnectionError, requests.Timeout) as error:
                 log.warning("network unavailable, stopping downloads: %s", error)
                 return
+            missing -= downloaded
+            if focused:
+                missing_first -= downloaded
 
     def _download(self, image: Image) -> bool:
         partial = self.images_dir / f"{image.id}.part"

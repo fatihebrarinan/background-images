@@ -3,6 +3,6 @@ Type=Application
 Name=Wallqueue
 Comment=Günlük duvar kağıtları
 Exec=wallqueue gui
-Icon=preferences-desktop-wallpaper
+Icon=wallqueue
 Terminal=false
 Categories=Utility;GTK;
