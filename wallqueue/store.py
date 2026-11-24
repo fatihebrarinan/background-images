@@ -66,6 +66,12 @@ class Store:
         found = self._images("SELECT * FROM images WHERE id = ?", image_id)
         return found[0] if found else None
 
+    def find(self, source: str, source_id: str) -> Image | None:
+        found = self._images(
+            "SELECT * FROM images WHERE source = ? AND source_id = ?", source, source_id
+        )
+        return found[0] if found else None
+
     def current(self) -> Image | None:
         current_id = self.get("current_id")
         return self.image(int(current_id)) if current_id else None

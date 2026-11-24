@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from collections.abc import Callable, Sequence
@@ -11,13 +12,14 @@ from pathlib import Path
 
 import requests
 
-from wallqueue import imaging
+from wallqueue import ezanvakti, imaging
 from wallqueue.config import Config, data_dir
 from wallqueue.desktop import set_wallpaper
 from wallqueue.http import DownloadTooLarge, Http
-from wallqueue.models import Image, State
+from wallqueue.models import Candidate, Image, State
 from wallqueue.rotation import rotate
 from wallqueue.sources import ALL_SOURCES, Source
+from wallqueue.sources.islami import Islami
 from wallqueue.store import Store
 
 log = logging.getLogger(__name__)
@@ -28,6 +30,8 @@ MAX_TICK_GAP_SECONDS = 15 * 60
 FETCH_RETRY_SECONDS = 15 * 60
 MAX_DOWNLOAD_ATTEMPTS = 3
 ARCHIVE_SKIP_DAYS = 30
+# Pictures the user adds by hand with `wallqueue add`.
+LOCAL_SOURCE = "yerel"
 
 
 def _skip_back(day: str) -> str:
@@ -41,6 +45,7 @@ class Status:
     ready: int
     disk_bytes: int
     active_seconds: float
+    islamic_theme: bool = False
 
 
 class Engine:
@@ -78,16 +83,18 @@ class Engine:
             self.advance()
 
     def fetch(self) -> bool:
-        """Ask every source for new images. Returns whether any source answered."""
+        """Ask every source for new images. Returns whether any online source answered."""
         self.store.put("last_fetch_attempt", self.clock())
-        reached = False
-        for source in self._enabled_sources():
+        sources = self._enabled_sources()
+        # Local sources always answer, so they must not stop the retries while offline.
+        reached = not any(source.needs_network for source in sources)
+        for source in sources:
             try:
                 added = self.store.add(source.latest(self.http))
             except (requests.RequestException, ValueError, KeyError, SyntaxError) as error:
                 log.warning("%s failed: %s", source.name, error)
                 continue
-            reached = True
+            reached = reached or source.needs_network
             log.info("%s: %d new", source.name, added)
         if reached:
             self.store.put("last_fetch_day", date.fromtimestamp(self.clock()).isoformat())
@@ -103,13 +110,50 @@ class Engine:
         if image is None:
             log.warning("no image available; keeping the current wallpaper")
             return None
+        return self.show(image)
 
+    def show(self, image: Image) -> Image:
+        """Put a downloaded image on the desktop and restart the interval."""
         self.apply_wallpaper(Path(image.path))
         self.store.mark_shown(image.id, self.clock())
         self.store.put("active_seconds", 0)
+        self._set_pinned([i for i in self._pinned() if i != image.id])
         log.info("showing %s: %s", image.source, image.title)
         self.replenish()
         return self.store.image(image.id)
+
+    def add_local(
+        self, path: Path, title: str = "", credit: str = "", page_url: str = ""
+    ) -> tuple[Image, bool]:
+        """Copy a picture from disk into the queue as the next one to show.
+
+        The user chose it on purpose, so any readable image is taken whatever its
+        shape. Adding the same file again reuses its entry. Returns the image and
+        whether it was new. Raises OSError or imaging.Rejected when unusable.
+        """
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        image = self.store.find(LOCAL_SOURCE, digest)
+        created = image is None
+        if image is None or not image.path or not Path(image.path).exists():
+            partial = self.images_dir / f"{LOCAL_SOURCE}-{digest[:16]}.part"
+            try:
+                wallpaper = imaging.prepare(path, partial, require_fit=False)
+                if image is None:
+                    self.store.add([self._local_candidate(path, digest, title, credit, page_url)])
+                    image = self.store.find(LOCAL_SOURCE, digest)
+                destination = self.images_dir / f"{image.id}.jpg"
+                partial.replace(destination)
+            finally:
+                partial.unlink(missing_ok=True)
+            self.store.mark_ready(image.id, destination, wallpaper.size, wallpaper.dhash)
+
+        # The picture on screen stays shown; anything else waits at the front.
+        if str(image.id) == self.store.get("current_id"):
+            self.store.set_state(image.id, State.SHOWN)
+        else:
+            self.store.set_state(image.id, State.READY)
+            self._set_pinned([image.id, *(i for i in self._pinned() if i != image.id)])
+        return self.store.image(image.id), created
 
     def replenish(self) -> None:
         """Bring the queue back to its target size and the disk under its limit."""
@@ -141,6 +185,7 @@ class Engine:
             ready=sum(image.state == State.READY for image in waiting),
             disk_bytes=self.store.disk_usage(),
             active_seconds=float(self.store.get("active_seconds", "0")),
+            islamic_theme=self._islamic_theme(),
         )
 
     # Scheduling
@@ -168,8 +213,47 @@ class Engine:
         return [s for s in self.sources if s.name not in self.config.disabled_sources]
 
     def _queue(self) -> list[Image]:
+        """Waiting images in showing order.
+
+        Pictures added by hand come first, newest addition first. On the religious
+        days Ezan Vakti marks, its Islamic pictures come next, so the next ready one
+        is shown and the next queued one is downloaded first. Everything else
+        follows the usual rotation.
+        """
         waiting = self.store.waiting(self.config.disabled_sources)
-        return rotate(waiting, self.store.source_last_shown())
+        pinned = self._pinned()
+        theme = self._islamic_theme()
+
+        def rank(image: Image) -> int:
+            if image.id in pinned:
+                return pinned.index(image.id)
+            return len(pinned) + (0 if theme and image.source == Islami.name else 1)
+
+        return sorted(rotate(waiting, self.store.source_last_shown()), key=rank)
+
+    def _islamic_theme(self) -> bool:
+        if all(source.name != Islami.name for source in self._enabled_sources()):
+            return False
+        return ezanvakti.islamic_theme(date.fromtimestamp(self.clock()))
+
+    def _pinned(self) -> list[int]:
+        return [int(i) for i in (self.store.get("pinned_ids") or "").split(",") if i]
+
+    def _set_pinned(self, ids: list[int]) -> None:
+        self.store.put("pinned_ids", ",".join(map(str, ids)))
+
+    def _local_candidate(
+        self, path: Path, digest: str, title: str, credit: str, page_url: str
+    ) -> Candidate:
+        return Candidate(
+            source=LOCAL_SOURCE,
+            source_id=digest,
+            title=title or path.stem,
+            image_url=path.resolve().as_uri(),
+            published=date.fromtimestamp(self.clock()).isoformat(),
+            page_url=page_url,
+            credit=credit,
+        )
 
     def _next_ready(self) -> Image | None:
         return next((i for i in self._queue() if i.state == State.READY), None)

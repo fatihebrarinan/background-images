@@ -12,7 +12,11 @@ from urllib3.util.retry import Retry
 
 from wallqueue import __version__
 
-_USER_AGENT = f"wallqueue/{__version__} (personal desktop wallpaper app)"
+# Wikimedia refuses generic library user agents; name the app and the library.
+_USER_AGENT = (
+    f"Wallqueue/{__version__} (personal desktop wallpaper app for Linux) "
+    f"python-requests/{requests.__version__}"
+)
 _TIMEOUT = (10, 60)
 _MAX_DOWNLOAD_BYTES = 80 * 1024 * 1024
 _CHUNK_BYTES = 256 * 1024

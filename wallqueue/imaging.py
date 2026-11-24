@@ -36,15 +36,23 @@ def fits_screen(width: int, height: int) -> bool:
     return MIN_ASPECT <= width / height <= MAX_ASPECT
 
 
-def prepare(source: Path, destination: Path) -> Wallpaper:
-    """Validate `source` and write a size-limited JPEG to `destination`."""
+def dimensions(path: Path) -> tuple[int, int]:
+    with Image.open(path) as opened:
+        return opened.size
+
+
+def prepare(source: Path, destination: Path, require_fit: bool = True) -> Wallpaper:
+    """Validate `source` and write a size-limited JPEG to `destination`.
+
+    With `require_fit` off, any readable image is accepted whatever its shape.
+    """
     try:
         with Image.open(source) as opened:
             image = ImageOps.exif_transpose(opened).convert("RGB")
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as error:
         raise Rejected(f"unreadable image: {error}") from error
 
-    if not fits_screen(*image.size):
+    if require_fit and not fits_screen(*image.size):
         raise Rejected(f"unsuitable size {image.width}x{image.height}")
 
     image.thumbnail((MAX_EDGE, MAX_EDGE), Image.Resampling.LANCZOS)

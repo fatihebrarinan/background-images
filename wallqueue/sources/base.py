@@ -11,6 +11,8 @@ from wallqueue.models import Candidate
 class Source(ABC):
     name: str
     label: str
+    # Whether an answer from this source shows that the computer is online.
+    needs_network: bool = True
 
     @abstractmethod
     def latest(self, http: Http) -> list[Candidate]:
